@@ -1366,7 +1366,7 @@ function auLabel(k,d){if(k==="tplx")return["Bakım paketi şablonları",""];if(k
  if(!d.t)return["Araç",d.plate||d.no||k];if(d.t==="s")return["Stok",d.name||k];
  if(d.t==="c")return[d.type==="tedarikci"?"Tedarikçi":"Müşteri",d.name||k];
  if(d.t==="p")return["Tedarikçi ödemesi",((D.data[d.sup]&&D.data[d.sup].name)||"")+" "+tl(d.amt||0)];
- if(d.t==="i")return["İade kaydı",tl(d.amt||0)];return[String(d.t),d.name||k]}
+ if(d.t==="i")return["İade kaydı",tl(d.amt||0)];if(d.t==="ag")return[d.k==="not"?"Ajanda notu":"Hatırlatma",String(d.ttl||d.txt||"").slice(0,40)];return[String(d.t),d.name||k]}
 function auSnap(){const m=new Map();for(const k in D.data){if(k==="alog"||k==="auth"||k==="meta")continue;const d=D.data[k];if(!d||typeof d!=="object"||d.draft)continue;
   try{const l=auLabel(k,d);m.set(k,{h:auHash(JSON.stringify(d)),ty:l[0],r:l[1],ll:(d.log||[]).length,jl:(d.jobs||[]).length,pl:(d.pays||[]).length})}catch(x){}}return m}
 function auDiff(prev,next){const out=[];
@@ -1437,6 +1437,70 @@ async function uSave(){if(!can("admin"))return deny();const a=authD(),isNew=uedi
  if(isNew)a.users.push(u);if(u.id===CU.id){CU.name=nm;CU.role=role}
  logAdd("kul","Kullanıcı",nm,isNew?"eklendi ("+ROLES[role]+")":"güncellendi"+(pin?" · PIN değişti":"")+(old.role!==role?" · yetki: "+ROLES[old.role]+" → "+ROLES[role]:"")+(old.on!==on?(on?" · aktif edildi":" · pasif yapıldı"):""));
  await saveRaw();uedit=null;uf={};render();toast("✅ Kaydedildi")}
+/* ===== Ajanda: takvim, hatırlatmalar ve notlar ===== */
+let ajv="cal",ajf={},ajed=null,ajshow=false,ajs="",ajm=null;
+const ajDef=()=>({txt:"",ttl:"",date:(ajv==="cal"&&ajs)||today(),time:""});
+const AGL=()=>Object.entries(D.data).filter(([k,d])=>d&&d.t==="ag").map(([id,d])=>({id,...d}));
+const ajN=()=>{const td=today();return AGL().filter(x=>x.k==="hat"&&!x.done&&x.date&&x.date<=td).length};
+const ajWho=x=>x.un?" · 👤 "+e(x.un):"";
+const ajMonthOf=d=>{const t=d?new Date(d+"T00:00:00"):new Date();return{y:t.getFullYear(),m:t.getMonth()}};
+const ajSrt=(a,b)=>((a.date||"")+(a.time||"")).localeCompare((b.date||"")+(b.time||""));
+function ajOpen(){ajv="cal";ajs=today();ajm=ajMonthOf(ajs);ajf=ajDef();ajed=null;ajshow=false;go("ajanda")}
+function ajTab(v){ajv=v;ajed=null;if(!ajm){ajs=today();ajm=ajMonthOf(ajs)}ajf=ajDef();render()}
+function ajGo(d){ajs=d;if(!ajed)ajf.date=d;render()}
+function ajMon(n){let y=ajm.y,m=ajm.m+n;while(m<0){m+=12;y--}while(m>11){m-=12;y++}ajm={y,m};render()}
+function ajToday(){ajs=today();ajm=ajMonthOf(ajs);if(!ajed)ajf.date=ajs;render()}
+async function ajSave(){if(!can("edit"))return deny();const f=ajf,txt=(f.txt||"").trim(),now=new Date().toISOString(),o=ajed&&D.data[ajed]?D.data[ajed]:null;
+ const id=o?ajed:"ag"+Date.now().toString(36)+Math.random().toString(36).slice(2,5);
+ if(ajv!=="not"){if(!txt){toast("⚠️ Hatırlatma metnini yazın",1);return}
+  D.data[id]={...(o||{t:"ag",k:"hat",done:false,c:now,u:CU?CU.id:"",un:CU?CU.name:""}),txt,date:f.date||"",time:f.date?(f.time||""):"",m:now};if(f.date){ajs=f.date;ajm=ajMonthOf(f.date)}}
+ else{const ttl=(f.ttl||"").trim();if(!txt&&!ttl){toast("⚠️ Not yazın",1);return}
+  D.data[id]={...(o||{t:"ag",k:"not",c:now,u:CU?CU.id:"",un:CU?CU.name:""}),ttl,txt,m:now}}
+ ajed=null;ajf=ajDef();await save();render();toast("✅ Kaydedildi")}
+async function ajToggle(id){const o=D.data[id];if(!o)return;if(!can("edit"))return deny();D.data[id]={...o,done:!o.done,dn:!o.done&&CU?CU.name:"",m:new Date().toISOString()};await save();render()}
+function ajEdit(id){const o=D.data[id];if(!o)return;if(!can("edit"))return deny();ajed=id;
+ if(o.k==="not"){ajv="not";ajf={ttl:o.ttl||"",txt:o.txt||"",date:"",time:""}}
+ else{if(ajv==="not")ajv="cal";ajf={txt:o.txt||"",ttl:"",date:o.date||"",time:o.time||""};if(o.date){ajs=o.date;ajm=ajMonthOf(o.date)}}
+ render();try{const f=document.getElementById("ajform");if(f)f.scrollIntoView({block:"center"})}catch(x){}}
+async function ajDel(id){const o=D.data[id];if(!o)return;if(!(can("edit")&&CU&&(CU.role==="admin"||o.u===CU.id))){deny();return}
+ if(!await askModal("Silinsin mi?","<b>"+e((o.ttl||o.txt||"").slice(0,60))+"</b> silinecek.","Evet, sil","Vazgeç"))return;delete D.data[id];if(ajed===id){ajed=null;ajf=ajDef()}await save();render()}
+function ajIcs(id){const o=D.data[id];if(!o||!o.date)return;const d=o.date.replace(/-/g,""),t=(o.time||"").replace(":",""),pad=s=>String(s).padStart(2,"0"),esc=s=>String(s||"").replace(/[\\;,]/g,m=>"\\"+m).replace(/\n/g,"\\n");
+ let dt;if(t){dt="DTSTART:"+d+"T"+t+"00";const [h,mi]=o.time.split(":").map(Number),end=new Date(2000,0,1,h,mi+30);dt+="\r\nDTEND:"+d+"T"+pad(end.getHours())+pad(end.getMinutes())+"00"}else dt="DTSTART;VALUE=DATE:"+d;
+ const ics=["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//BDR Servis//Ajanda//TR","BEGIN:VEVENT","UID:"+id+"@bdr-servis",
+  "DTSTAMP:"+new Date().toISOString().replace(/[-:]/g,"").replace(/\.\d+/,""),dt,"SUMMARY:"+esc(o.txt),"BEGIN:VALARM","ACTION:DISPLAY","DESCRIPTION:"+esc(o.txt),"TRIGGER:"+(t?"-PT15M":"PT9H"),"END:VALARM","END:VEVENT","END:VCALENDAR"].join("\r\n");
+ try{const f=new File([ics],"hatirlatma.ics",{type:"text/calendar"}),a=document.createElement("a");a.href=URL.createObjectURL(f);a.download=f.name;a.style.display="none";document.body.appendChild(a);a.click();setTimeout(()=>a.remove(),1500)}catch(z){toast("Takvim dosyası oluşturulamadı",1)}}
+function ajIt(x){const ed=can("edit"),own=ed&&CU&&(CU.role==="admin"||x.u===CU.id);
+ return `<div class="c" style="display:flex;gap:10px;align-items:flex-start;padding:8px 10px${x.done?";opacity:.65":""}"><button class="g" style="flex:none;width:36px;height:36px;padding:0;font-size:19px" ${ed?`onclick="ajToggle('${x.id}')"`:"disabled"}>${x.done?"☑":"☐"}</button><div style="flex:1;min-width:0"><div style="${x.done?"text-decoration:line-through;":""}word-break:break-word">${e(x.txt)}</div><div class="mu" style="font-size:12.5px">${x.date?e(fdS(x.date))+(x.time?" · "+e(x.time):""):"Tarihsiz"}${ajWho(x)}${x.done&&x.dn?" · ✔ "+e(x.dn):""}</div></div><div style="display:flex;gap:4px;flex:none">${x.date&&!x.done?`<button class="g sm" title="Telefon takvimine ekle" onclick="ajIcs('${x.id}')">📅</button>`:""}${ed?`<button class="g sm" onclick="ajEdit('${x.id}')">✏️</button>`:""}${own?`<button class="g sm" onclick="ajDel('${x.id}')">🗑</button>`:""}</div></div>`}
+function ajForm(){if(!can("edit"))return "";const note=ajv==="not";
+ let h=`<div class="c" id="ajform"><b>${ajed?"✏️ Düzenle":(note?"＋ Yeni not":"＋ Yeni hatırlatma")}</b>`;
+ if(!note)h+=`<input placeholder="Ne hatırlatılsın? (örn. Ali Bey'i ara)" value="${e(ajf.txt||"")}" oninput="ajf.txt=this.value" style="width:100%;margin-top:6px"><div class="row" style="margin-top:6px"><input type="date" value="${e(ajf.date||"")}" onchange="ajf.date=this.value" style="flex:1"><input type="time" value="${e(ajf.time||"")}" onchange="ajf.time=this.value" style="flex:1"></div>`;
+ else h+=`<input placeholder="Başlık (isteğe bağlı)" value="${e(ajf.ttl||"")}" oninput="ajf.ttl=this.value" style="width:100%;margin-top:6px"><textarea placeholder="Notunuzu yazın…" rows="4" oninput="ajf.txt=this.value" style="width:100%;margin-top:6px">${e(ajf.txt||"")}</textarea>`;
+ return h+`<div class="row" style="margin-top:8px">${ajed?`<button class="g" style="flex:1" onclick="ajed=null;ajf=ajDef();render()">Vazgeç</button>`:""}<button style="flex:2" onclick="ajSave()">${ajed?"💾 Kaydet":"＋ Ekle"}</button></div></div>`}
+function ajCal(R){const td=today(),by={};R.forEach(x=>{if(x.date)(by[x.date]=by[x.date]||[]).push(x)});
+ const y=ajm.y,m=ajm.m,first=new Date(y,m,1),off=(first.getDay()+6)%7,dim=new Date(y,m+1,0).getDate(),pad=n=>String(n).padStart(2,"0");
+ let h=`<div class="c" style="padding:8px"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px"><button class="g sm" style="flex:none;width:46px;padding:6px 0;font-size:18px" onclick="ajMon(-1)">‹</button><b>${e(first.toLocaleDateString("tr-TR",{month:"long",year:"numeric"}))}</b><button class="g sm" style="flex:none;width:46px;padding:6px 0;font-size:18px" onclick="ajMon(1)">›</button></div><div style="display:grid;grid-template-columns:repeat(7,1fr);gap:3px;text-align:center">`+["Pzt","Sal","Çar","Per","Cum","Cmt","Paz"].map(d=>`<div class="mu" style="font-size:11.5px">${d}</div>`).join("");
+ for(let i=0;i<off;i++)h+="<div></div>";
+ for(let d=1;d<=dim;d++){const ds=y+"-"+pad(m+1)+"-"+pad(d),it=by[ds]||[],sel=ds===ajs,isT=ds===td;
+  const dots=it.slice().sort((a,b)=>(a.done?1:0)-(b.done?1:0)).slice(0,3).map(x=>`<i style="display:inline-block;width:6px;height:6px;border-radius:50%;margin:0 1px;background:${x.done?"#1b7f3b":(ds<td?"#c62828":"var(--ac)")}"></i>`).join("");
+  h+=`<button onclick="ajGo('${ds}')" style="width:100%;height:auto;margin:0;padding:3px 0;min-height:46px;border-radius:10px;border:${sel?"2px solid var(--hd)":"1px solid var(--bd)"};background:${isT?"var(--hd)":"transparent"};color:${isT?"#fff":"var(--tx)"};display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px"><span style="font-weight:700;font-size:14px">${d}</span><span style="height:7px;line-height:7px">${dots}</span></button>`}
+ h+=`</div><div style="text-align:center;margin-top:6px"><a onclick="ajToday()" style="cursor:pointer;color:var(--hd);font-weight:700;font-size:13px">Bugüne git</a></div></div>`;
+ const dl=(by[ajs]||[]).slice().sort((a,b)=>(a.done?1:0)-(b.done?1:0)||ajSrt(a,b));
+ h+=`<div style="margin:12px 2px 4px;font-weight:700">${e(new Date(ajs+"T00:00:00").toLocaleDateString("tr-TR",{day:"numeric",month:"long",weekday:"long"}))} <span class="mu">(${dl.length})</span></div>`+(dl.map(ajIt).join("")||'<div class="mu" style="margin:4px 2px 8px">Bu güne kayıtlı hatırlatma yok.</div>');
+ return h}
+function ajPage(){if(!ajm){ajs=today();ajm=ajMonthOf(ajs)}const v=ajv,td=today(),L=AGL(),R=L.filter(x=>x.k==="hat");
+ let h=backH+`<div class="chips"><button class="${v==="cal"?"on":""}" onclick="ajTab('cal')">📅 Takvim</button><button class="${v==="hat"?"on":""}" onclick="ajTab('hat')">⏰ Liste</button><button class="${v==="not"?"on":""}" onclick="ajTab('not')">🗒 Notlar</button></div>`;
+ if(v==="cal"){const od=R.filter(x=>!x.done&&x.date&&x.date<td).sort(ajSrt);
+  if(od.length)h+=`<div style="margin:6px 2px 4px;font-weight:700;color:#c62828">Geciken (${od.length})</div>`+od.map(ajIt).join("");
+  h+=ajCal(R)+ajForm()}
+ else if(v==="hat"){h+=ajForm();
+  const gr=[["Geciken","#c62828",R.filter(x=>!x.done&&x.date&&x.date<td).sort(ajSrt)],["Bugün","var(--hd)",R.filter(x=>!x.done&&x.date===td).sort(ajSrt)],["Yaklaşan","var(--tx)",R.filter(x=>!x.done&&x.date>td).sort(ajSrt)],["Tarihsiz","var(--tx)",R.filter(x=>!x.done&&!x.date)]],dn=R.filter(x=>x.done).sort((a,b)=>String(b.m).localeCompare(String(a.m)));
+  let any=false;gr.forEach(g=>{if(g[2].length){any=true;h+=`<div style="margin:12px 2px 4px;font-weight:700;color:${g[1]}">${g[0]} (${g[2].length})</div>`+g[2].map(ajIt).join("")}});
+  if(!any&&!dn.length)h+='<div class="mu" style="margin-top:10px">Henüz hatırlatma yok.</div>';
+  if(dn.length)h+=`<div style="margin:12px 2px 4px"><a onclick="ajshow=!ajshow;render()" style="cursor:pointer;color:var(--hd);font-weight:700">${ajshow?"▾":"▸"} Tamamlananlar (${dn.length})</a></div>`+(ajshow?dn.map(ajIt).join(""):"")}
+ else{h+=ajForm();const ed=can("edit"),N=L.filter(x=>x.k==="not").sort((a,b)=>String(b.m||b.c).localeCompare(String(a.m||a.c)));
+  h+=N.map(x=>{const own=ed&&CU&&(CU.role==="admin"||x.u===CU.id);return `<div class="c"><div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start"><b style="word-break:break-word">${e(x.ttl||"Not")}</b><div style="display:flex;gap:4px;flex:none">${ed?`<button class="g sm" onclick="ajEdit('${x.id}')">✏️</button>`:""}${own?`<button class="g sm" onclick="ajDel('${x.id}')">🗑</button>`:""}</div></div>${x.txt?`<div style="white-space:pre-wrap;word-break:break-word;margin-top:4px">${e(x.txt)}</div>`:""}<div class="mu" style="font-size:12.5px;margin-top:4px">${fdt(x.m||x.c)}${ajWho(x)}</div></div>`}).join("")||'<div class="mu" style="margin-top:10px">Henüz not yok.</div>'}
+ return h}
+
 const LA={ekle:"Ekledi:",degis:"Güncelledi:",sil:"Sildi:",giris:"Giriş yaptı",cikis:"Çıkış yaptı",kul:"Kullanıcı işlemi:",toplu:"Toplu değişiklik:"},LI={ekle:"🟢",degis:"✏️",sil:"🗑",giris:"🔑",cikis:"🚪",kul:"👥",toplu:"📦"};
 function logPage(){if(!can("admin")){tab="home";return home()}const L=alogD().items.slice().reverse(),us=authD().users,F=lgf?L.filter(x=>x.u===lgf):L;
  return backH+`<div class="c"><div class="mu" style="font-size:12.5px">Her ekleme, değişiklik, silme ve giriş kullanıcı adıyla burada tutulur. En son 5000 kayıt saklanır; yedekle birlikte taşınır.</div></div><div class="chips wrapc"><button class="${lgf?"":"on"}" onclick="lgf='';lgn=50;render()">Tümü</button>${us.map(u=>`<button class="${lgf===u.id?"on":""}" onclick="lgf='${u.id}';lgn=50;render()">${e(u.name)}</button>`).join("")}</div>`+
@@ -1455,8 +1519,8 @@ function go(t){trp=false;jpStash();if(sm==="rapor")sm="stok";cvk=null;supId=null
 function render(){
  let h;
  if(wz)h=wizard();else if(tab==="cars"&&cur)h=D.data[cur]?(jf?jform():edit?editV():viewV()):(cur=null,list());
- else h={home,cars:list,cust,stock,notif,rapor,muh,usr:usrPage,alog:logPage}[tab]();
- if(jPause&&!wz&&!(tab==="cars"&&cur))h=jpBanner()+h;app.innerHTML=h;$("#hd").innerHTML={home:"Ana Sayfa",cars:"Araçlar",cust:"Müşteriler",stock:(sm==="rapor"?`<span onclick="sm='stok';render()" style="cursor:pointer;margin-right:8px">←</span>Stok Raporları`:"Stok"),new:"Yeni Kayıt",notif:"Bildirimler",rapor:"Kasa Raporu",muh:"Muhasebe",usr:"Kullanıcılar",alog:"İşlem Kaydı"}[tab]+bell()+(tab==="stock"&&sm!=="rapor"?`<span onclick="sm='rapor';sx=null;sr.t='';sr.x=-1;render()" style="float:right;cursor:pointer;margin-right:14px;font-size:13px;background:rgba(255,255,255,.18);border-radius:999px;padding:2px 10px">📊 Stok Raporlar</span>`:"")+(tab==="cust"&&!ce&&!cvk?(trp?`<span onclick="trp=false;render()" style="float:right;cursor:pointer;margin-right:14px;font-size:13px">← Müşteriler</span>`:`<span onclick="trp=true;tr.x=-1;render();window.scrollTo(0,0)" style="float:right;cursor:pointer;margin-right:14px;font-size:13px;background:rgba(255,255,255,.18);border-radius:999px;padding:2px 10px">🚚 Tedarikçi Raporu</span>`):"");
+ else h={home,cars:list,cust,stock,notif,rapor,muh,usr:usrPage,alog:logPage,ajanda:ajPage}[tab]();
+ if(jPause&&!wz&&!(tab==="cars"&&cur))h=jpBanner()+h;app.innerHTML=h;$("#hd").innerHTML={home:"Ana Sayfa",cars:"Araçlar",cust:"Müşteriler",stock:(sm==="rapor"?`<span onclick="sm='stok';render()" style="cursor:pointer;margin-right:8px">←</span>Stok Raporları`:"Stok"),new:"Yeni Kayıt",notif:"Bildirimler",rapor:"Kasa Raporu",muh:"Muhasebe",usr:"Kullanıcılar",alog:"İşlem Kaydı",ajanda:"Ajanda"}[tab]+bell()+(tab==="stock"&&sm!=="rapor"?`<span onclick="sm='rapor';sx=null;sr.t='';sr.x=-1;render()" style="float:right;cursor:pointer;margin-right:14px;font-size:13px;background:rgba(255,255,255,.18);border-radius:999px;padding:2px 10px">📊 Stok Raporlar</span>`:"")+(tab==="cust"&&!ce&&!cvk?(trp?`<span onclick="trp=false;render()" style="float:right;cursor:pointer;margin-right:14px;font-size:13px">← Müşteriler</span>`:`<span onclick="trp=true;tr.x=-1;render();window.scrollTo(0,0)" style="float:right;cursor:pointer;margin-right:14px;font-size:13px;background:rgba(255,255,255,.18);border-radius:999px;padding:2px 10px">🚚 Tedarikçi Raporu</span>`):"");
  const NI={home:'<path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v10h4.5v-6h4v6h4.5V10"/>',new:'<circle cx="12" cy="12" r="9"/><path d="M12 7.8v8.4M7.8 12h8.4"/>',cars:'<path d="M3 13.5 5.2 8.3A2 2 0 0 1 7 7h10a2 2 0 0 1 1.8 1.3L21 13.5V19h-3v-2H6v2H3z"/><circle cx="7.5" cy="14" r="1.1"/><circle cx="16.5" cy="14" r="1.1"/>',cust:'<circle cx="9" cy="8" r="3.3"/><path d="M2.8 20c0-3.4 2.8-6 6.2-6s6.2 2.6 6.2 6"/><circle cx="17.2" cy="9" r="2.5"/><path d="M17.4 14.2c2.4.2 4.2 2.1 4.2 4.8"/>',stock:'<path d="M12 3 20 7v10l-8 4-8-4V7z"/><path d="M4 7l8 4 8-4M12 11v10"/>',muh:'<rect x="5" y="3" width="14" height="18" rx="2.2"/><rect x="8" y="6" width="8" height="3.6" rx=".8"/><path d="M8.5 13.5h.01M12 13.5h.01M15.5 13.5h.01M8.5 17h.01M12 17h.01M15.5 17h.01" stroke-width="2.4"/>'};
 const navIc=k=>`<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${NI[k]}</svg>`;
 $("#nav").innerHTML=[["home","home","Ana Sayfa"],["new","new","Yeni Kayıt"],["cars","cars","Araçlar"],["cust","cust","Müşteri"],["stock","stock","Stok"],["muh","muh","Muhasebe"]].filter(n=>!(n[0]==="new"&&!can("edit"))).map(n=>`<div class="${tab===n[0]?"on":""}" onclick="${n[0]==="new"?"newV()":`go('${n[0]}')`}"><span>${navIc(n[1])}</span><b>${n[2]}</b></div>`).join("")}
@@ -1464,7 +1528,7 @@ function home(){const a=V(),now=today(),mo=now.slice(0,7),n=s=>a.filter(v=>stv(v
  const mOf=x=>{x=String(x||"").trim();if(!x)return"";if(/^\d{4}-\d{2}-\d{2}$/.test(x))return x.slice(0,7);let m=x.match(/^(\d{1,2})[.\/](\d{1,2})[.\/](\d{4})$/);if(m)return m[3]+"-"+m[2].padStart(2,"0");const d=new Date(x);return isNaN(d)?"":ymd(d).slice(0,7)},jIn=v=>(v.jobs||[]).filter(j=>mOf(j.date)===mo),jm=a.reduce((x,v)=>x+jIn(v).length,0),cm=a.filter(v=>mOf(v.created)===mo||jIn(v).length>0).length;
  const pays=a.flatMap(v=>v.pays||[]).filter(p=>p.date===now),sm=t=>pays.filter(p=>p.type===t).reduce((x,p)=>x+(+p.amt||0),0);
  const pend=a.filter(v=>rest(v)>0.5&&(stv(v)==="bitti"||stv(v)==="teslim")),cfg=D.data.cfg||{};
- return `<div class="hm"><div class="c"><div class="top"><div><div class="mu">${new Date().toLocaleDateString("tr-TR",{day:"numeric",month:"long",year:"numeric"})}</div><h2 style="margin:2px 0;font-size:17px">Merhaba, ${e(CU?CU.name:"BDR")}</h2><div class="mu">Bugün serviste ${n("bekliyor")+n("islemde")} araç var.</div></div><button class="g" onclick="ib=!ib;render()">🏦 IBAN</button></div>
+ return `<div class="hm"><div class="c"><div class="top"><div><div class="mu">${new Date().toLocaleDateString("tr-TR",{day:"numeric",month:"long",year:"numeric"})}</div><h2 style="margin:2px 0;font-size:17px">Merhaba, ${e(CU?CU.name:"BDR")}</h2><div class="mu">Bugün serviste ${n("bekliyor")+n("islemde")} araç var.</div>${ajN()?`<div style="margin-top:3px"><a onclick="ajOpen()" style="color:#c62828;cursor:pointer;font-weight:700;font-size:13px">🗓 ${ajN()} hatırlatma bekliyor</a></div>`:""}</div><div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button class="g" onclick="ajOpen()">🗓 Ajanda${ajN()?` <b style="background:#c62828;color:#fff;border-radius:999px;padding:0 7px;font-size:12px">${ajN()}</b>`:""}</button><button class="g" onclick="ib=!ib;render()">🏦 IBAN</button></div></div>
  ${ib?ibanBox():""}
  <div class="st"><div>🕒<b>${n("bekliyor")}</b>Bekleyen</div><div>🔧<b>${n("islemde")}</b>İşlemde</div><div>✅<b>${n("bitti")+n("teslim")}</b>Biten</div></div>
  <div class="mu" style="margin-top:6px;text-align:center">Bu ay: ${cm} araç · ${jm} işlem</div></div>
